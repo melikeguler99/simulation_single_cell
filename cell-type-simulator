@@ -1,0 +1,82 @@
+import warnings
+import cellxgene_census
+import scanpy as sc
+import plotly.express as px
+import pandas as pd
+
+# Suppress the FutureWarning about observed=False
+warnings.filterwarnings("ignore", category=FutureWarning)
+
+def analyze_cell_types(disease_name, technology):
+    """
+    Analyzes cell type probabilities for a given disease and technology using plotly.express horizontal histogram.
+    """
+
+    census = cellxgene_census.open_soma()
+    technology_escaped = technology.replace("'", "\\'")
+
+    disease_obs = cellxgene_census.get_obs(
+        census, 
+        organism="homo_sapiens", 
+        value_filter=f"disease == '{disease_name}' and is_primary_data == True and assay == '{technology_escaped}'"
+    )
+
+    if len(disease_obs) == 0:
+        print(f"No cells found for '{disease_name}' with technology '{technology}'.")
+        census.close()
+        return
+
+    print(f"Found {len(disease_obs)} cells for '{disease_name}' with technology '{technology}'.")
+
+    adata = cellxgene_census.get_anndata(
+        census,
+        organism="homo_sapiens",
+        obs_value_filter=f"disease == '{disease_name}' and is_primary_data == True and assay == '{technology_escaped}'",
+        column_names={"obs": ["cell_type", "tissue", "disease", "assay"]}
+    )
+    
+    # Filtering
+    sc.pp.filter_cells(adata, min_genes=200)
+    sc.pp.filter_genes(adata, min_cells=10)
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)
+
+    if "cell_type" in adata.obs.columns:
+        cell_type_counts = adata.obs["cell_type"].value_counts()
+        cell_type_probabilities = cell_type_counts / cell_type_counts.sum()
+        cell_type_probabilities = cell_type_probabilities[cell_type_probabilities > 0.01]
+
+        # Convert to pandas DataFrame for plotly
+        df = pd.DataFrame({
+            'Cell Type': cell_type_probabilities.index,
+            'Probability': cell_type_probabilities.values
+        })
+
+        # Create horizontal histogram with px.bar
+        fig = px.bar(
+            df, 
+            x='Probability', 
+            y='Cell Type', 
+            orientation='h',  # Ensure horizontal orientation
+            title=f"Cell Type Probabilities in {disease_name.title()} Sample ({technology})",
+            labels={'Probability': 'Probability', 'Cell Type': 'Cell Type'}
+        )
+        
+        # Update layout for better appearance
+        fig.update_layout(
+            title_font_size=17,
+            title_font_family="Arial",
+            xaxis_title_font_size=14,
+            yaxis_title_font_size=14,
+            yaxis_tickfont_size=12,
+            title_y=0.95
+        )
+
+        fig.show()
+
+    census.close()
+
+if __name__ == "__main__":
+    disease_name = input("Enter the disease name (e.g., 'plasma cell myeloma'): ")
+    technology = input("Enter the technology/assay (e.g., '10x 3' v3'): ")
+    analyze_cell_types(disease_name, technology)
